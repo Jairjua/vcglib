@@ -18,7 +18,7 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the             *
 * GNU General Public License (http://www.gnu.org/licenses/gpl.txt)          *
 * for more details.                                                         *
-*                                                                           *
+*                                        teste                              *
 ****************************************************************************/
 #include <vcg/complex/algorithms/bitquad_support.h>
 
