@@ -18,9 +18,13 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the             *
 * GNU General Public License (http://www.gnu.org/licenses/gpl.txt)          *
 * for more details.                                                         *
-*                                        teste                              *
+*                                                                           *
 ****************************************************************************/
+#include <tuple>
+#include <vector>
 #include <vcg/complex/algorithms/bitquad_support.h>
+#include <utility>      // std::pair
+
 
 /** BIT-QUAD creation support:
     a collection of methods that,
@@ -103,6 +107,7 @@ typedef BitQuad<MeshType> BQ; // static class to make basic quad operations
 
 // helper function:
 // given a triangle, merge it with its best neightboord to form a quad
+// needs  componente vcg::face::Qualityf
 template <bool override>
 static void selectBestDiag(FaceType *fi){
 
@@ -399,6 +404,82 @@ static void CopyTopology(FaceType *fnew, FaceType * fold)
     fnew->V(1) = fold->V(1);
     fnew->V(2) = fold->V(2);
 }
+
+/**
+ make dominant in order of a triangle property. After, choose the best edge by a quad quality
+ descent=false. prioritizing worst triangles
+ testConvex=false. if true ignore non-convex quad
+ */
+static int MakeDominantByTriOrder(MeshType &m, ScalarType quality=0, ScalarType limit=0, bool descedent=false, bool testConvex=false){
+  typedef std::pair<ScalarType,FaceType *> priorityElement;
+  std::vector<priorityElement> priorityList;
+
+  vcg::tri::UpdateFlags<MeshType>::FaceClearV(m);  //dispensável?
+  for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD() && !fi->IsV()) 
+  {
+    fi->SetV(); //dispensável?
+    priorityList.push_back(std::make_pair(vcg::QualityRadii(fi->P(0),fi->P(1),fi->P(2)), &*fi));
+  }
+
+  assert(priorityList.size() == m.FN());
+
+  if(descedent)
+  {
+      sort(priorityList.begin(), priorityList.end(),[](const priorityElement& a, const priorityElement& b){return a.first > b.first;});
+  }else{
+      sort(priorityList.begin(), priorityList.end()); //ascending order
+  }
+
+  //mostrar pilha
+//  cout<<"list of 10 first pair triquality-face"<<endl;
+//  for(int i=0;i<10 && i<priorityList.size();i++){
+//      cout << priorityList[i].first << " " << priorityList[i].second << std::endl;
+//  }
+
+  int nClusters=0;
+  vcg::tri::UpdateFlags<MeshType>::FaceClearV(m);
+  //make clusters
+  for(int j=0;j<priorityList.size();j++)
+  {
+    FaceType *face=priorityList[j].second;
+    if(face->IsV()) continue;
+    face->SetV(); 
+    std::vector<std::pair<ScalarType,int> > edges;
+    for(int i=0; i<3;++i)
+    {
+      edges.push_back(std::make_pair(BQ::QuadQualitys(face,i,quality),i));
+    }
+    std::sort(edges.begin(), edges.end(), [](const std::pair<ScalarType,int>& a, const std::pair<ScalarType,int>& b){return (a.first > b.first);}); //prior to best edge
+
+    //cout<<"list of quadquality-edge for face: "<<face<<endl;
+    for(int i=0; i<3;++i)
+    {
+      int ed=edges[i].second;
+      if(!face->FFp(ed)->IsV()) // skip border
+      {
+        //std::cout << edges[i].first << " " << edges[i].second <<endl;
+        if (testConvex)
+        {
+          if(!BQ::TestQuadConvex(face, ed)) continue;
+        }
+
+        face->FFp(ed)->SetV();
+        face->SetF(ed);
+        face->FFp(ed)->SetF(face->FFi(ed));
+        //cout<<face->FFp(ed)->IsV()<<endl;
+        ++nClusters;
+        break;
+      }
+    }
+    
+  }
+  //cout<<"nº clusters = "<<nClusters<<endl;
+  //cout<<"nº pure triangles = "<<m.FN()-2*nClusters<<endl;
+  //return std::make_pair(nClusters,m.FN()-2*nClusters);
+  return nClusters;
+}
+
+
 /**
  makes any mesh quad only by refining it so that a quad is created over all
  previous diags
@@ -846,10 +927,11 @@ static bool MakePureByFlip(MeshType &m, int maxdist=10000)
 
 /**
   given a triangle mesh, makes it quad dominant by merging triangle pairs into quads
-  various euristics:
+  various heuristics:
       level = 0: maximally greedy. Leaves fewest triangles
       level = 1: smarter: leaves more triangles, but makes better quality quads
       level = 2: even more so (marginally)
+      level = 3: two pass
 */
 static void MakeDominant(MeshType &m, int level){
 
@@ -857,12 +939,85 @@ static void MakeDominant(MeshType &m, int level){
     fi->ClearAllF();
     fi->Q() = 0;
   }
-
-
+  if (level ==3){
+    MakeDominantPass<true> (m);
+    MakeDominantPass<false> (m);
+    return;
+  }
+    
   MakeDominantPass<false> (m);
   if (level>0)  MakeDominantPass<true> (m);
   if (level>1)  MakeDominantPass<true> (m);
   if (level>0)  MakeDominantPass<false> (m);
+
+}
+
+/**
+given a triangle mesh with FF topology, makes it quad dominant by merging(making a edge faux) triangle pairs into quads
+Segue a sequência de uma lista ordenada de arestas com base em uma qualidade:
+       quality=0 - default. quadQuality
+       quality=1 - velho
+       quality=2 - orto planar
+ descedent = true=ordem decrescente
+ testConvex = false. Se true não emparelha quadriláteros com ângulos maiores que pi.
+ limit = 0. Don't pair if quality is less than limit.
+*/
+static int MakeDominantByOrder(MeshType &m, ScalarType quality=0, ScalarType limit=0, bool descedent=true, bool testConvex=false){
+  //vcg::tri::UpdateTopology<MeshType>::FaceFace(m); 
+  tri::UpdateFlags<MeshType>::FaceClearV(m);
+
+  typedef std::tuple<FaceType *, int, double> priorityElement; 
+  std::vector<priorityElement> priorityList;
+
+  for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD() && !fi->IsV()) {
+    fi->SetV();
+    for (int i=0;i<3;i++){
+      if(!fi->FFp(i)->IsV()){
+        priorityList.push_back(std::make_tuple(&*fi, i, BQ::QuadQualitys(&*fi,i,quality))); //
+      }
+    }
+  }
+
+  if(descedent){
+    sort(priorityList.begin(), priorityList.end(),[&](const priorityElement& a, const priorityElement& b){return std::get<2>(a) > std::get<2>(b);});
+  }else{
+    sort(priorityList.begin(), priorityList.end(),[&](const priorityElement& a, const priorityElement& b){return std::get<2>(a) < std::get<2>(b);});
+  }
+  
+  //for(int i=0;i<priorityList.size();i++){  std::cout << std::get<0>(priorityList[i]) << " " << std::get<1>(priorityList[i]) << " " << std::get<2>(priorityList[i]) << std::endl;}
+
+  vcg::tri::UpdateFlags<MeshType>::FaceClearV(m);
+  int nClusters=0;
+  for(int i=0;i<priorityList.size();i++)
+  {
+      if(!(std::get<0>(priorityList[i])->IsV()) && !(std::get<0>(priorityList[i])->FFp(std::get<1>(priorityList[i]))->IsV()))
+      {
+          if (testConvex){
+            if(!BQ::TestQuadConvex(std::get<0>(priorityList[i]), std::get<1>(priorityList[i])))
+            {
+              //TestQuadConvex(std::get<0>(priorityList[i]), std::get<1>(priorityList[i]));
+              //std::cout<<"---+1 não convexo"<<std::endl;
+              continue;
+            }
+          }
+          
+          if(std::get<2>(priorityList[i]) < limit)
+          {
+            //std::cout<<"---+1 below limit"<<std::endl;
+            continue;
+          }
+          
+          std::get<0>(priorityList[i])->SetV();
+          std::get<0>(priorityList[i])->FFp(std::get<1>(priorityList[i]))->SetV();
+          //std::cout<<"+1 edge faux"<<std::endl;
+          ++nClusters;
+
+          std::get<0>(priorityList[i])->SetF(std::get<1>(priorityList[i]));
+          std::get<0>(priorityList[i])->FFp(std::get<1>(priorityList[i]))->SetF(std::get<0>(priorityList[i])->FFi(std::get<1>(priorityList[i])));
+      }
+  }
+
+  return nClusters;
 }
 
 };
