@@ -35,6 +35,7 @@
 #include <vcg/complex/algorithms/clean.h>
 #include <vcg/complex/algorithms/polygon_support.h>
 
+#include <map>
 
 namespace vcg {
 namespace tri {
@@ -52,7 +53,7 @@ public:
   typedef typename SaveMeshType::VertexIterator VertexIterator;
   typedef typename SaveMeshType::FaceIterator FaceIterator;
 
-  static int Save(SaveMeshType &m, const char * filename, int mask=0 )
+  static int Save(SaveMeshType &m, const char * filename, int mask=0, bool inOrder=false )
   {
     vcg::face::Pos<FaceType> he;
     vcg::face::Pos<FaceType> hei;
@@ -102,12 +103,19 @@ public:
       tri::RequireFFAdjacency(m);
       std::vector<VertexPointer> polygon;
       tri::UpdateFlags<SaveMeshType>::FaceClearV(m);
+      // create vertex id's
+      std::map<VertexPointer,int> vid;
+      int i = 0;
+      for(auto vp=m.vert.begin();vp!=m.vert.end();++vp)
+        vid.insert( std::pair<VertexPointer,int>(&*vp, i++));
+
       for(FaceIterator fi=m.face.begin();fi!=m.face.end();++fi) if (!fi->IsD()) if (!fi->IsV()) {
-        vcg::tri::PolygonSupport<SaveMeshType,SaveMeshType>::ExtractPolygon(&*fi,polygon);
+        vcg::tri::PolygonSupport<SaveMeshType,SaveMeshType>::ExtractPolygon(&*fi, polygon, inOrder);
+       
         if(!polygon.empty())
         {
           fprintf(fpout,"%d ", int(polygon.size()) );
-          for (size_t i=0; i<polygon.size(); i++) fprintf(fpout,"%d ", polygon[i]->Flags() );
+          for (size_t i=0; i<polygon.size(); i++) fprintf(fpout,"%d ", vid[polygon[i]] );
           fprintf(fpout,"\n");
         }
       }

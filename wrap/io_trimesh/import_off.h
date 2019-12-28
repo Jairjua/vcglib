@@ -476,9 +476,9 @@ namespace vcg {
 									std::vector<VertexPointer> q(4);
 									for (int qqi = 0; qqi < 4; ++qqi)
 										q[qqi] = &mesh.vert[vertIndices[qqi]];
-									BitQuad<MESH_TYPE>::QuadTriangulate(q);
+									/*BitQuad<MESH_TYPE>::QuadTriangulate(q); //remove reordenation
 									for (int qqi = 0; qqi < 4; ++qqi)
-										vertIndices[qqi] = q[qqi] - &mesh.vert[0];
+										vertIndices[qqi] = q[qqi] - &mesh.vert[0];*/
 									// build a two face fan
 									for (int j = 0; j < 2; j++)
 									{
