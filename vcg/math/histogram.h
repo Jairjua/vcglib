@@ -156,14 +156,14 @@ public:
      * This method is used to correctly initialize the bins of the histogram.
      * n is the number of valid intervals between minv and maxv.
      * for a more robust working, the Histogram class stores also the two out of range intervals (-inf, minv] and [maxv, +inf)
-     * Each bin is left closed (eg it contains the value
+     * Each bin is RIGHT closed (eg bin i contains the values in (i-1,i]
      * The \a gamma parameter is applied to modify the distribution of the ranges of the bins. Default uniform distibution.
      *
      */
   void SetRange(ScalarType _minv, ScalarType _maxv, int _n,ScalarType gamma=1.0 );
 
-  ScalarType MinV() {return minv;} 	//! Minimum value of the range where the histogram is defined.
-  ScalarType MaxV() {return maxv;} 	//! Maximum value of the range where the histogram is defined.
+  ScalarType MinV() {return minv;} 	//! Minimum value of the range where the histogram is defined. =R[1]
+  ScalarType MaxV() {return maxv;} 	//! Maximum value of the range where the histogram is defined. =R[n+1]
   ScalarType Sum()  {return sum;} 	//! Total sum of inserted values.
   ScalarType Cnt()  {return cnt;}
 
