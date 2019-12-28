@@ -69,7 +69,8 @@
    int CountBitPolygonInternalValency(const FaceType& f, int wedge)
     - returns valency of vertex in terms  of polygons (quads, tris...)
 
-
+  int CountFauxs(MeshType& m)
+   - count the number of faux edge in the mesh. If inconsistency return -1.
 */
 
 // these should become a parameter in the corresponding class
@@ -987,12 +988,30 @@ static void UpdateValencyInFlags(MeshType& m){
   }
 }
 
+//only to closed surfaces
 static void UpdateValencyInQuality(MeshType& m){
   tri::UpdateQuality<MeshType>::VertexConstant(m,0);
 
   for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD()) {
      for (int w=0; w<3; w++)
          fi->V(w)->Q() += (fi->IsF(w)||fi->IsF((w+2)%3) )? 0.5f:1;
+  }
+}
+
+//For closed surfaces or with borders
+static void UpdateValencyInQualityWithBorders(MeshType& m){
+  tri::UpdateQuality<MeshType>::VertexConstant(m,0);
+  tri::UpdateFlags<MeshType>::FaceClearV(m);
+  
+  for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD() && !fi->IsV()) {
+    fi->SetV();
+    for (int w=0; w<3; w++){
+      fi->V(w)->Q() += 1;
+      if (&*fi->FFp(w)==&*fi) fi->V1(w)->Q() += 1;
+      if (fi->IsF(w)){
+        fi->V(w)->Q() -= 1;
+      }
+    }
   }
 }
 
@@ -1020,6 +1039,58 @@ static ScalarType quadQuality(FaceType *f, int edgeInd){
     d = f->V2(edgeInd)->P();
 
   return quadQuality(a,b,c,d);
+}
+
+// new helper function:
+// returns quality of a quad formed by points a,b,c,d in convention order
+// tris abc and cda, with false diag in ac
+// switch:  0 - default. quadQuality
+//          1 - velho
+//          2 - orto planar
+static ScalarType QuadQualitys(FaceType *f, int edgeInd, int version=0)
+{
+  switch(version) 
+  {
+    case 0:
+      return quadQuality(f,edgeInd);
+    case 1:
+      return (f->P((edgeInd + 1) % 3) - f->P(edgeInd)).Norm();
+    case 2:
+      CoordType
+      a = f->V0(edgeInd)->P(),
+      b = f->FFp(edgeInd)->V2( f->FFi(edgeInd) )->P(),
+      c = f->V1(edgeInd)->P(),
+      d = f->V2(edgeInd)->P();
+      return QuadQualitys(a,b,c,d,version);
+    //case 3: like case 2 but using normal already calculate for each face
+  }
+
+}
+
+/**
+ // helper funcion:
+// count the number of faux edge in the mesh. If inconsistency return -1.
+ */
+static int CountFauxs(MeshType& m){
+  vcg::tri::UpdateFlags<MeshType>::FaceClearV(m);
+  int n=0;
+  for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD() && !fi->IsV()) {
+    fi->SetV();
+    if (fi->IsAnyF()){
+      for (int k=0; k<3; k++){
+        if (fi->IsF(k)){
+          if (fi->FFp(k)->IsF(fi->FFi(k))){
+            if (!fi->FFp(k)->IsV()){ //skip duplicate
+              n++;
+            }
+          }else{
+            return -1; //inconsistency
+          }
+        }
+      }
+    }
+  }
+  return n;
 }
 
 /**
@@ -1116,6 +1187,50 @@ static int TestEdgeRotation(const FaceType &f, int w0, ScalarType *gain=NULL)
 #endif
 }
 
+/**verify if sum of inner adjacent angles of triangles are greater than PI (tolerance=10^-7)
+return false if verify. return true otherwise (convex)
+*/
+static bool TestQuadConvex(FaceType *f, int ed){
+  auto A=f->V2(ed)->P();
+  auto B=f->V0(ed)->P();
+  auto C=f->V1(ed)->P();
+  auto D=f->FFp(ed)->V2(f->FFi(ed))->P();
+
+  auto a1=math::Acos((A-B)*(C-B)/((A-B).Norm() * (C-B).Norm()));
+  auto a2=math::Acos((D-B)*(C-B)/((D-B).Norm() * (C-B).Norm()));
+  if (a1+a2 - M_PI > 0.0000001) 
+  {
+    return false;
+  }
+  auto a3=math::Acos((A-C)*(B-C)/((A-C).Norm() * (B-C).Norm()));
+  auto a4=math::Acos((D-C)*(B-C)/((D-C).Norm() * (B-C).Norm()));
+  if (a3+a4 - M_PI > 0.0000001) 
+  {
+    return false;
+  }else{return true;}
+}
+
+/* returns average quad quality, and assigns it to triangle quality
+*/
+static ScalarType MeasureQuality(MeshType &m, int quality=0)
+{
+//  assert(MeshType::HasPerFaceFlags());
+//  assert(MeshType::HasPerFaceQuality());
+  ScalarType res = 0;
+  int div = 0;
+  for (FaceIterator fi = m.face.begin();  fi!=m.face.end(); fi++) if (!fi->IsD()) {
+    if (fi->IsAnyF()) {
+
+      ScalarType q = QuadQualitys( &*fi, FauxIndex(&*fi), quality );
+      //ScalarType q = BQ::quadQuality( &*fi, BQ::FauxIndex(&*fi) );
+      fi->Q() = q;
+      res += q;
+      div++;
+    }
+  }
+  if (!div) return 0; else return res / div;
+}
+
 private:
 
 // helper function:
@@ -1130,7 +1245,36 @@ static ScalarType quadQuality(const CoordType &a, const CoordType &b, const Coor
   return score / 4;
 }
 
-
+// new helper function:
+// returns quality of a quad formed by points a,b,c,d in convention order
+// tris abc and cda, with false diag in ac
+// switch:  0 - default. quadQuality
+//          1 - velho
+//          2 - orto planar
+static ScalarType QuadQualitys(const CoordType &a, const CoordType &b, const CoordType &c, const CoordType &d, int version=0){
+  switch(version) {
+    case 0:
+      return quadQuality(a,b,c,d);
+    case 1:
+      return (c-a).Norm();
+    case 2:
+      ScalarType a1,a2,a3,b1,b2,b3,pq,oq,mq; //inner angles of abc and cda. 
+      a1=vcg::Angle(b-a,c-a);
+      a2=vcg::Angle(c-b,a-b);
+      a3=vcg::Angle(a-c,b-c);
+      //cout << "angles abd = "<<a1<<" "<<a2<<" "<<a3<<endl;
+      b1=vcg::Angle(d-c,a-c);
+      b2=vcg::Angle(a-d,c-d);
+      b3=vcg::Angle(c-a,d-a);
+      //cout << "angles bcb = "<<b1<<" "<<b2<<" "<<b3<<endl;
+      pq = (1 + (Normal<CoordType>(a,b,c).Normalize() * Normal<CoordType>(c,d,a).Normalize())) / 2;
+      oq = (math::Sin(a2) + math::Sin(b2) + math::Sin(a1 + b3) + math::Sin(a3 + b1)) / 4;
+      mq = (pq + oq) / 2;
+      //cout << "pq="<<pq<<" oq="<<oq<<" mq="<<mq<<endl;
+      return mq;
+  }
+            
+}
 
 
 private:
